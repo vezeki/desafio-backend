@@ -31,7 +31,13 @@ bun run start
 | `bun run test:integration` | testes de integração (requer `infra:up`) |
 | `bun run test:concurrency` | testes de concorrência (requer `infra:up`) |
 | `bun run infra:up` / `infra:down` | sobe / derruba a infraestrutura local |
-| `bun run migration:create` / `migration:up` / `migration:down` | migrations |
+| `bun run migration:up` / `migration:down` / `migration:status` | aplica, reverte ou lista as migrations |
+
+## Testes
+
+Os testes de integração usam o PostgreSQL do Docker Compose, num banco separado (`wagering_test`) que é criado e migrado automaticamente na primeira execução. Para apontar para outro banco, defina `TEST_DATABASE_URL`.
+
+Os testes não limpam tabelas entre execuções: o ledger é append-only também no banco de teste. Cada teste cria seus próprios ids.
 
 ## Health checks
 
