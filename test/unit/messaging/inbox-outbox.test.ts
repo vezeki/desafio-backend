@@ -113,6 +113,49 @@ describe("OutboxMessage", () => {
     expect(message.nextAttemptAt!.getTime() - at(99).getTime()).toBe(5 * 60_000);
   });
 
+  test("a lease hides the row until it expires, and only the holder owns it", () => {
+    const message = OutboxMessage.enqueue(event());
+    message.claim("instance-a", at(30));
+
+    expect(message.heldBy("instance-a", at(29))).toBe(true);
+    expect(message.heldBy("instance-b", at(10))).toBe(false);
+    expect(message.heldBy("instance-a", at(30))).toBe(false);
+    expect(message.isClaimable(at(29))).toBe(false);
+    expect(message.isClaimable(at(30))).toBe(true);
+  });
+
+  test("a failed attempt releases the lease and remembers the error", () => {
+    const message = OutboxMessage.enqueue(event());
+    message.claim("instance-a", at(30));
+    message.scheduleRetry(at(1), undefined, () => 0, "x".repeat(2_000));
+
+    expect(message.heldBy("instance-a", at(1))).toBe(false);
+    expect(message.lastError).toHaveLength(1_000);
+    expect(message.attempts).toBe(1);
+    expect(message.isDue(at(1))).toBe(false);
+    expect(message.isDue(at(2))).toBe(true);
+  });
+
+  test("release gives the row back at a chosen instant without counting an attempt", () => {
+    const message = OutboxMessage.enqueue(event());
+    message.claim("instance-a", at(30));
+    message.release(at(5));
+
+    expect(message.attempts).toBe(0);
+    expect(message.lockedBy).toBeUndefined();
+    expect(message.isDue(at(4))).toBe(false);
+    expect(message.isDue(at(5))).toBe(true);
+  });
+
+  test("publishing releases the lease", () => {
+    const message = OutboxMessage.enqueue(event());
+    message.claim("instance-a", at(30));
+    message.markPublished(at(2));
+    expect(message.lockedBy).toBeUndefined();
+    expect(message.lastError).toBeUndefined();
+    expect(message.isPending()).toBe(false);
+  });
+
   test("lag is measured from occurredAt", () => {
     const message = OutboxMessage.enqueue(event());
     expect(message.lagMs(at(3))).toBe(3_000);

@@ -71,7 +71,11 @@ curl localhost:3000/providers/provider-a/wagering/transactions/transaction-123
 
 `REFUND` e `ROLLBACK` exigem `referenceExternalTransactionId`. `Idempotency-Key` é obrigatório: repetir a mesma requisição devolve o resultado original com `"idempotentReplay": true`.
 
-Se a referência ainda não chegou, a API responde `202` e um worker retoma a transação quando `next_retry_at` vence (`FOR UPDATE SKIP LOCKED`, várias instâncias). Depois de 10 tentativas (~27 min) ela vira `REJECTED` com `REFERENCE_NOT_FOUND`. O worker sobe com a API; em teste ele fica desligado. `WORKERS_ENABLED=false` desliga em qualquer ambiente.
+Se a referência ainda não chegou, a API responde `202` e um worker retoma a transação quando `next_retry_at` vence (`FOR UPDATE SKIP LOCKED`, várias instâncias). Depois de 10 tentativas (~27 min) ela vira `REJECTED` com `REFERENCE_NOT_FOUND`.
+
+Os eventos commitados (transação processada, rejeitada, saldo alterado, referência pendente) vão para a fila `integration-events.fifo`. O publicador aluga a linha por 30 s, publica fora da transação e marca `published_at`. Várias instâncias dividem a outbox. Se o processo morre no meio, o lease vence e outra publica. Um envio repetido é seguro: o consumidor deduplica pelo `eventId`.
+
+Os dois workers sobem com a API e ficam desligados em teste. `WORKERS_ENABLED=false` desliga os dois em qualquer ambiente.
 
 | Status | Significado |
 |---|---|
@@ -103,4 +107,4 @@ Toda resposta traz `x-correlation-id`. Se a requisição enviar esse header, o m
 ## Health checks
 
 - `GET /health/live` — processo vivo
-- `GET /health/ready` — PostgreSQL e SQS alcançáveis
+- `GET /health/ready` — PostgreSQL e as duas filas SQS (apostas e eventos) alcançáveis

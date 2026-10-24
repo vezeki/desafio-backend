@@ -26,7 +26,10 @@ export class HealthController {
   async ready(@Res({ passthrough: true }) res: Response) {
     const [postgres, sqs] = await Promise.all([
       this.check(() => this.em.getConnection().execute("select 1")),
-      this.check(() => this.sqs.send(new GetQueueUrlCommand({ QueueName: this.config.SQS_WAGER_QUEUE_NAME }))),
+      this.check(async () => {
+        await this.sqs.send(new GetQueueUrlCommand({ QueueName: this.config.SQS_WAGER_QUEUE_NAME }));
+        await this.sqs.send(new GetQueueUrlCommand({ QueueName: this.config.SQS_EVENTS_QUEUE_NAME }));
+      }),
     ]);
     const ready = postgres.status === "up" && sqs.status === "up";
     res.status(ready ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE);

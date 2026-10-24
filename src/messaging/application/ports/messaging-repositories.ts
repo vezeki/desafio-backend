@@ -13,4 +13,12 @@ export interface InboxRepository {
 
 export interface OutboxRepository {
   add(message: OutboxMessage): void;
+  findByIdForUpdate(id: string): Promise<OutboxMessage | undefined>;
+  /**
+   * Due, unlocked rows, locked with `FOR UPDATE SKIP LOCKED` and leased to `lockedBy` until `until`.
+   * Must run inside `UnitOfWork.run`: the lease is visible to the other publishers only after that transaction commits.
+   */
+  claimDue(now: Date, until: Date, lockedBy: string, limit: number): Promise<OutboxMessage[]>;
+  /** Persists bookkeeping of a message loaded or claimed in this transaction. */
+  save(message: OutboxMessage): void;
 }

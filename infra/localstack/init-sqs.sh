@@ -20,4 +20,8 @@ awslocal sqs create-queue \
     \"RedrivePolicy\": \"{\\\"deadLetterTargetArn\\\":\\\"${DLQ_ARN}\\\",\\\"maxReceiveCount\\\":\\\"${MAX_RECEIVE_COUNT}\\\"}\"
   }"
 
+awslocal sqs create-queue \
+  --queue-name integration-events.fifo \
+  --attributes FifoQueue=true,ContentBasedDeduplication=false
+
 echo "SQS queues ready (maxReceiveCount=${MAX_RECEIVE_COUNT})"

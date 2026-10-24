@@ -240,6 +240,26 @@ Não reprocesso a pendente **dentro** do submit da BET. Isso inverteria a ordem 
 
 O `correlationId` dos eventos do worker é `pending-reference:{transactionId}`; o `causationId` é a própria transação.
 
+## Publicação da outbox
+
+O evento nasce na mesma transação SQL da mudança financeira. Publicar no SQS é outro sistema, então acontece **depois** do commit, num worker (`PublishOutboxUseCase`).
+
+A publicação não segura a transação aberta: uma conexão do pool não fica esperando rede. No lugar disso, a linha é **alugada**:
+
+1. Transação curta: `SELECT ... WHERE published_at IS NULL AND next_attempt_at <= now() AND (locked_until IS NULL OR locked_until <= now()) ORDER BY occurred_at, id LIMIT n FOR UPDATE SKIP LOCKED`, grava `locked_by` e `locked_until = now() + 30s`, commit.
+2. Fora da transação: `SendMessage` na fila FIFO `integration-events.fifo`.
+3. Outra transação curta. Se o lease ainda é nosso: `published_at = now()`. Se o envio falhou e o lease ainda é nosso: `attempts++`, `next_attempt_at` pelo backoff (1 s, dobrando até 5 min, jitter de 20%) e o lease é solto.
+
+`SKIP LOCKED` reparte as linhas entre instâncias. O lease impede que a segunda pegue a linha da primeira **enquanto ela publica**. Se o processo morre no meio, o lease vence e outra instância assume. Nada é apagado: a outbox nunca desiste de um evento commitado.
+
+Garantia: **at-least-once**. Morrer depois do `SendMessage` e antes de marcar `published_at` publica de novo. O `MessageDeduplicationId` é o `eventId`, então o SQS descarta a repetição dentro da janela de 5 minutos — otimização, não a garantia. Quem consome deduplica pelo `eventId`, e isso vale depois da janela também.
+
+`MessageGroupId` é o `aggregateId`. Eventos do mesmo agregado saem na ordem de `occurredAt`; agregados diferentes publicam em paralelo. Se o envio de um evento falha, os seguintes **do mesmo agregado** voltam para a fila com o mesmo `next_attempt_at`, sem contar tentativa: anunciar o saldo novo antes do antigo seria pior do que esperar o backoff. Um agregado que falhou não segura os outros.
+
+Falha de envio não perde o evento: a linha continua pendente, com `last_error`, e volta quando o backoff passa. O `/health/ready` só fica de pé se o Postgres, a fila de apostas e a fila de eventos respondem.
+
+O worker segue o mesmo ciclo do de referências pendentes (`OUTBOX_POLL_INTERVAL_MS`, lote de 20) e também fica desligado em `test`.
+
 ## Interpretações
 
 - **Saldo inicial.** Uma wallet aberta com saldo positivo ganha uma transação interna `OPENING` (provider `internal`), já `PROCESSED`, com o lançamento de crédito correspondente e um evento `WalletBalanceChanged`. Assim o saldo sempre é explicado pelo ledger. Wallet com saldo zero não tem lançamento.
@@ -254,4 +274,4 @@ O `correlationId` dos eventos do worker é `pending-reference:{transactionId}`; 
 
 ## Ainda por documentar
 
-As próximas etapas completam este documento: autenticação (no-op + desenho), publicação do outbox, consumo do SQS com DLQ, observabilidade e limitações conhecidas.
+As próximas etapas completam este documento: autenticação (no-op + desenho), consumo do SQS com DLQ, observabilidade e limitações conhecidas.

@@ -14,6 +14,7 @@ const ConfigSchema = z.object({
   AWS_SECRET_ACCESS_KEY: z.string().default("test"),
   SQS_WAGER_QUEUE_NAME: z.string().default("wager-transactions.fifo"),
   SQS_WAGER_DLQ_NAME: z.string().default("wager-transactions-dlq.fifo"),
+  SQS_EVENTS_QUEUE_NAME: z.string().default("integration-events.fifo"),
 
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 
@@ -21,6 +22,9 @@ const ConfigSchema = z.object({
   WORKERS_ENABLED: z.enum(["true", "false"]).optional(),
   PENDING_REFERENCE_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   PENDING_REFERENCE_BATCH_SIZE: z.coerce.number().int().positive().max(100).default(20),
+  OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
+  OUTBOX_BATCH_SIZE: z.coerce.number().int().positive().max(100).default(20),
+  OUTBOX_LEASE_MS: z.coerce.number().int().positive().default(30_000),
 });
 
 export type AppConfig = Omit<z.infer<typeof ConfigSchema>, "WORKERS_ENABLED"> & { WORKERS_ENABLED: boolean };
