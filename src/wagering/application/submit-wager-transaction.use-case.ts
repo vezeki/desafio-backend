@@ -4,11 +4,10 @@ import { UniqueConstraintConflictError } from "../../shared/application/errors.t
 import type { IdGenerator } from "../../shared/application/id-generator.ts";
 import type { TransactionContext, UnitOfWork } from "../../shared/application/unit-of-work.ts";
 import { Money, type MoneyProps } from "../../shared/domain/money.ts";
-import type { ReferenceEvaluation } from "../domain/wager-transaction.ts";
 import { WagerTransaction, type CreateWagerTransactionProps } from "../domain/wager-transaction.ts";
 import type { WagerTransactionKind } from "../domain/wager-transaction-kind.ts";
 import { WagerSettlement } from "../domain/wager-settlement.ts";
-import { settlementEvents } from "./settlement-events.ts";
+import { persistSettlement, resolveReference } from "./settlement-persistence.ts";
 import { IdempotencyConflictError } from "./wagering-application-errors.ts";
 import { toWagerTransactionView, type WagerTransactionView } from "./wager-transaction-view.ts";
 
@@ -103,20 +102,19 @@ export class SubmitWagerTransactionUseCase {
     const settlement = this.settlement.settle({
       transaction,
       wallet,
-      reference: await this.evaluateReference(ctx, transaction),
+      reference: await resolveReference(ctx, transaction),
       ledgerEntryId: this.ids.next(),
       now,
     });
-
-    ctx.transactions.add(transaction);
-    if (settlement.outcome === "PROCESSED" && settlement.entry && wallet) {
-      ctx.wallets.save(wallet);
-      ctx.ledger.add(settlement.entry);
-    }
-    const origin = { correlationId: command.correlationId, causationId: command.causationId, occurredAt: now };
-    for (const message of settlementEvents(settlement, transaction, wallet, origin, this.ids)) {
-      ctx.outbox.add(message);
-    }
+    persistSettlement(
+      ctx,
+      settlement,
+      transaction,
+      wallet,
+      "add",
+      { correlationId: command.correlationId, causationId: command.causationId, occurredAt: now },
+      this.ids,
+    );
 
     return { transaction: toWagerTransactionView(transaction), idempotentReplay: false };
   }
@@ -157,16 +155,6 @@ export class SubmitWagerTransactionUseCase {
       throw new IdempotencyConflictError(`Idempotency-Key ${idempotencyKey} was already used with a different payload`);
     }
     return { transaction: toWagerTransactionView(existing), idempotentReplay: true };
-  }
-
-  private async evaluateReference(ctx: TransactionContext, transaction: WagerTransaction): Promise<ReferenceEvaluation> {
-    if (!transaction.referenceExternalTransactionId) return transaction.evaluateReference(undefined);
-    const reference = await ctx.transactions.findByProviderExternalId(
-      transaction.providerId,
-      transaction.referenceExternalTransactionId,
-    );
-    const dependents = reference ? await ctx.transactions.findProcessedDependentKinds(reference.id) : [];
-    return transaction.evaluateReference(reference, dependents);
   }
 
   private toProps(command: SubmitWagerTransactionCommand): CreateWagerTransactionProps {

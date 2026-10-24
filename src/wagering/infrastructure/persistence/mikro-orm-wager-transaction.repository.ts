@@ -1,3 +1,4 @@
+import { LockMode } from "@mikro-orm/core";
 import type { EntityManager } from "@mikro-orm/postgresql";
 import { Money } from "../../../shared/domain/money.ts";
 import type { WagerTransactionRepository } from "../../application/ports/wager-transaction-repository.ts";
@@ -59,6 +60,23 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
       { fields: ["kind"] },
     );
     return records.map((record) => record.kind as WagerTransactionKind);
+  }
+
+  async claimDuePendingReferences(now: Date, limit: number): Promise<WagerTransaction[]> {
+    const records = await this.em.find(
+      WagerTransactionRecord,
+      { status: WagerTransactionStatus.PendingReference, nextRetryAt: { $lte: now } },
+      {
+        lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE,
+        refresh: true,
+        orderBy: { nextRetryAt: "asc", id: "asc" },
+        limit,
+      },
+    );
+    return records.flatMap((record) => {
+      const transaction = this.track(record);
+      return transaction ? [transaction] : [];
+    });
   }
 
   add(transaction: WagerTransaction): void {

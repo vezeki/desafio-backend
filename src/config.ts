@@ -16,16 +16,25 @@ const ConfigSchema = z.object({
   SQS_WAGER_DLQ_NAME: z.string().default("wager-transactions-dlq.fifo"),
 
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
+
+  /** When omitted, workers run in every environment except `test` (so e2e does not race the poller). */
+  WORKERS_ENABLED: z.enum(["true", "false"]).optional(),
+  PENDING_REFERENCE_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
+  PENDING_REFERENCE_BATCH_SIZE: z.coerce.number().int().positive().max(100).default(20),
 });
 
-export type AppConfig = z.infer<typeof ConfigSchema>;
+export type AppConfig = Omit<z.infer<typeof ConfigSchema>, "WORKERS_ENABLED"> & { WORKERS_ENABLED: boolean };
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
   const parsed = ConfigSchema.safeParse(env);
   if (!parsed.success) {
     throw new Error(`Invalid configuration:\n${z.prettifyError(parsed.error)}`);
   }
-  return parsed.data;
+  const { WORKERS_ENABLED, ...rest } = parsed.data;
+  return {
+    ...rest,
+    WORKERS_ENABLED: WORKERS_ENABLED === "true" ? true : WORKERS_ENABLED === "false" ? false : rest.NODE_ENV !== "test",
+  };
 }
 
 export const APP_CONFIG = Symbol("APP_CONFIG");

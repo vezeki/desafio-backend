@@ -221,9 +221,24 @@ A lista de campos é explícita de propósito: um campo novo no JSON (comentári
 | Já tem REFUND ou ROLLBACK `PROCESSED` | `REFERENCE_ALREADY_REVERSED` |
 | Esgotou as tentativas sem ela chegar | `REFERENCE_NOT_FOUND` |
 
-O worker que retoma as pendentes vencidas entra na próxima etapa. A API já persiste o estado e responde `202`.
-
 A checagem da wallet vem **antes** da referência: transação para wallet inexistente é `WALLET_NOT_FOUND` na hora, não fica pendente. Wallet não chega "fora de ordem".
+
+### Worker de referências pendentes
+
+`ProcessDuePendingReferencesUseCase` retoma as linhas vencidas. Cada linha roda na **sua** transação SQL:
+
+1. `SELECT ... WHERE status = 'PENDING_REFERENCE' AND next_retry_at <= now() ORDER BY next_retry_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`
+2. Lock da wallet (`FOR UPDATE`)
+3. O mesmo `WagerSettlement` do submit: processa, rejeita ou agenda a próxima tentativa
+4. Grava transação, ledger (se houver) e outbox
+
+`SKIP LOCKED` faz N instâncias dividirem o trabalho sem pegar a mesma linha. Uma linha travada por outra instância é pulada; o próximo tick a vê se ainda estiver devida.
+
+O worker do Nest (`PendingReferenceWorker`) faz poll a cada `PENDING_REFERENCE_POLL_INTERVAL_MS` (padrão 500 ms). Se o lote sai cheio, o próximo tick é imediato (há fila). Em `test` ele não sobe — os testes de API não competem com o poller. `WORKERS_ENABLED=false` desliga em qualquer ambiente.
+
+Não reprocesso a pendente **dentro** do submit da BET. Isso inverteria a ordem dos locks (submit já tem a wallet e iria atrás da pendente; o worker já tem a pendente e vai atrás da wallet) e geraria deadlock. A latência extra é no máximo um intervalo de poll depois que `next_retry_at` vence; o índice `ix_wtx_pending_by_reference` fica pronto se essa otimização valer o risco depois.
+
+O `correlationId` dos eventos do worker é `pending-reference:{transactionId}`; o `causationId` é a própria transação.
 
 ## Interpretações
 
@@ -239,4 +254,4 @@ A checagem da wallet vem **antes** da referência: transação para wallet inexi
 
 ## Ainda por documentar
 
-As próximas etapas completam este documento: worker de referências pendentes, autenticação (no-op + desenho), publicação do outbox, consumo do SQS com DLQ, observabilidade e limitações conhecidas.
+As próximas etapas completam este documento: autenticação (no-op + desenho), publicação do outbox, consumo do SQS com DLQ, observabilidade e limitações conhecidas.

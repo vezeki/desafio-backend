@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
+import { ProcessDuePendingReferencesUseCase } from "../../src/wagering/application/process-due-pending-references.use-case.ts";
 import { startTestApp, type TestApp } from "../support/app.ts";
 
 let api: TestApp;
@@ -114,6 +115,22 @@ describe("POST /wagering/transactions", () => {
     const replay = await submit(payload);
     expect(replay.status).toBe(202);
     expect(replay.body).toMatchObject({ transactionId: response.body.transactionId, idempotentReplay: true });
+  });
+
+  test("the worker applies a due REFUND after its BET arrives", async () => {
+    const target = await createWallet("100.00");
+    const betId = `bet-${randomUUID()}`;
+    const pending = await submit(body(target, { kind: "REFUND", money: brl("25.00"), referenceExternalTransactionId: betId }));
+    expect(pending.status).toBe(202);
+    await submit(body(target, { externalTransactionId: betId, money: brl("25.00") }));
+
+    await api.sql`update wager_transactions set next_retry_at = now() - interval '1 second' where id = ${pending.body.transactionId}`;
+    await api.app.get(ProcessDuePendingReferencesUseCase).execute(50);
+
+    const got = await api.request("GET", `/wagering/transactions/${pending.body.transactionId}`);
+    expect(got.body).toMatchObject({ status: "PROCESSED", referenceTransactionId: expect.any(String) });
+    const wallet = await api.request("GET", `/wallets/${target.walletId}`);
+    expect(wallet.body.balance).toEqual(brl("100.00"));
   });
 
   test("400 without Idempotency-Key", async () => {

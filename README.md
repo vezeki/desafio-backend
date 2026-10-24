@@ -71,6 +71,8 @@ curl localhost:3000/providers/provider-a/wagering/transactions/transaction-123
 
 `REFUND` e `ROLLBACK` exigem `referenceExternalTransactionId`. `Idempotency-Key` é obrigatório: repetir a mesma requisição devolve o resultado original com `"idempotentReplay": true`.
 
+Se a referência ainda não chegou, a API responde `202` e um worker retoma a transação quando `next_retry_at` vence (`FOR UPDATE SKIP LOCKED`, várias instâncias). Depois de 10 tentativas (~27 min) ela vira `REJECTED` com `REFERENCE_NOT_FOUND`. O worker sobe com a API; em teste ele fica desligado. `WORKERS_ENABLED=false` desliga em qualquer ambiente.
+
 | Status | Significado |
 |---|---|
 | `201` | processada |
