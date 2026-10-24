@@ -1,23 +1,37 @@
-import { Global, Module } from "@nestjs/common";
+import { type DynamicModule, Global, Module } from "@nestjs/common";
 import { MikroOrmModule } from "@mikro-orm/nestjs";
-import { APP_CONFIG, loadConfig, type AppConfig } from "./config.ts";
-import { createMikroOrmConfig } from "./shared/infrastructure/database/mikro-orm.config.ts";
-import { SqsModule } from "./shared/infrastructure/sqs/sqs.module.ts";
+import { APP_CONFIG, type AppConfig } from "./config.ts";
 import { HealthController } from "./health/health.controller.ts";
+import { createMikroOrmConfig } from "./shared/infrastructure/database/mikro-orm.config.ts";
+import { PersistenceModule } from "./shared/infrastructure/database/persistence.module.ts";
+import { SqsModule } from "./shared/infrastructure/sqs/sqs.module.ts";
+import { WalletModule } from "./wallet/wallet.module.ts";
 
 @Global()
-@Module({
-  providers: [{ provide: APP_CONFIG, useFactory: (): AppConfig => loadConfig() }],
-  exports: [APP_CONFIG],
-})
-class ConfigModule {}
+@Module({})
+class ConfigModule {
+  static forRoot(config: AppConfig): DynamicModule {
+    return {
+      module: ConfigModule,
+      providers: [{ provide: APP_CONFIG, useValue: config }],
+      exports: [APP_CONFIG],
+    };
+  }
+}
 
-@Module({
-  imports: [
-    ConfigModule,
-    MikroOrmModule.forRoot({ ...createMikroOrmConfig(), registerRequestContext: true }),
-    SqsModule,
-  ],
-  controllers: [HealthController],
-})
-export class AppModule {}
+@Module({})
+export class AppModule {
+  static forRoot(config: AppConfig): DynamicModule {
+    return {
+      module: AppModule,
+      imports: [
+        ConfigModule.forRoot(config),
+        MikroOrmModule.forRoot({ ...createMikroOrmConfig({}, config), registerRequestContext: true }),
+        PersistenceModule,
+        SqsModule,
+        WalletModule,
+      ],
+      controllers: [HealthController],
+    };
+  }
+}

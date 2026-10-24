@@ -1,3 +1,4 @@
+import { IsolationLevel } from "@mikro-orm/core";
 import type { EntityManager } from "@mikro-orm/postgresql";
 import { MikroOrmInboxRepository, MikroOrmOutboxRepository } from "../../../messaging/infrastructure/persistence/mikro-orm-messaging.repositories.ts";
 import { MikroOrmWagerTransactionRepository } from "../../../wagering/infrastructure/persistence/mikro-orm-wager-transaction.repository.ts";
@@ -57,6 +58,16 @@ export class MikroOrmUnitOfWork implements UnitOfWork {
   async read<T>(work: (ctx: TransactionContext) => Promise<T>): Promise<T> {
     try {
       return await work(createContext(this.em.fork()));
+    } catch (error) {
+      throw translate(error);
+    }
+  }
+
+  async snapshot<T>(work: (ctx: TransactionContext) => Promise<T>): Promise<T> {
+    try {
+      return await this.em
+        .fork()
+        .transactional((em) => work(createContext(em)), { isolationLevel: IsolationLevel.REPEATABLE_READ, readOnly: true });
     } catch (error) {
       throw translate(error);
     }

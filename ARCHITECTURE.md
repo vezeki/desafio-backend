@@ -93,6 +93,62 @@ Por que não `SERIALIZABLE`: as invariantes já estão protegidas por lock e con
 - Se as tentativas acabarem, ou o banco estiver fora, o erro vira `TransientInfrastructureError` (a API responderá 503; o cliente pode repetir com a mesma `Idempotency-Key`).
 - Violações de `UNIQUE` viram `UniqueConstraintConflictError` com o nome da constraint. O caso de uso decide o significado: na abertura de wallet, `uq_wallets_player_currency` significa "outra requisição criou primeiro" → `WalletAlreadyExistsError`.
 
+## API HTTP
+
+### Status codes
+
+O provedor precisa decidir **só pelo status** se reenvia a requisição, sem interpretar a mensagem. Cada situação tem um código próprio, igual em todos os endpoints:
+
+| Situação | Status | Reenviar? |
+|---|---|---|
+| Criado | `201` | — |
+| Payload inválido (formato, tipo, `Money` mal formado, cursor inválido) | `400 VALIDATION_ERROR` | só depois de corrigir |
+| Recurso não encontrado | `404` | não |
+| Conflito (wallet duplicada) | `409` | não |
+| Regra de negócio violada | `422` | não |
+| Falha transitória (banco fora, lock timeout esgotado) | `503 INFRASTRUCTURE_UNAVAILABLE` + `Retry-After` | sim |
+| Erro inesperado | `500 INTERNAL_ERROR` (logado com stack) | — |
+
+O mapeamento fica num só lugar, `ApiExceptionFilter`. Os casos de uso lançam erros de domínio ou de aplicação, sem saber nada de HTTP, e o filtro traduz pelo `code` do erro. O módulo compartilhado não importa os erros de cada módulo.
+
+### Formato de erro
+
+Inspirado no RFC 9457 (Problem Details), com `Content-Type: application/problem+json`:
+
+```json
+{ "type": "urn:wagering:problem:validation-error", "title": "Invalid request", "status": 400,
+  "code": "VALIDATION_ERROR", "detail": "invalid request",
+  "issues": [{ "path": "initialBalance.amount", "message": "Invalid input: expected string, received number" }],
+  "correlationId": "6b43845b-..." }
+```
+
+Erros do próprio framework (JSON malformado, rota inexistente) saem no mesmo formato.
+
+### Validação na borda
+
+- O zod confere só o **formato** da requisição (campos presentes, tipos, UUIDs, limites de paginação).
+- O formato do valor monetário e a moeda são validados por `Money`, que é a única fonte dessas regras. Não existe uma regex de dinheiro duplicada no controller.
+- Um id que não é UUID responde `400` antes de chegar ao banco. Sem isso, o Postgres recusaria o cast, e o erro viraria `500`.
+
+### Correlation id
+
+Toda requisição tem um `x-correlation-id`: o recebido, se for bem formado (até 128 caracteres de `[A-Za-z0-9_.:-]`), ou um UUID novo. Ele volta no header da resposta, aparece no corpo dos erros e vai para os eventos do outbox, o que permite seguir uma operação da API até a fila.
+
+### Paginação do ledger
+
+- O cursor é a última `sequence` devolvida, junto com o `walletId`, em JSON e base64url. Para o cliente ele é **opaco**: o formato pode mudar sem quebrar a API.
+- É **estável**: o ledger é append-only e `sequence` é contínua por wallet, então lançamentos novos entram no fim e nunca deslocam as páginas já lidas. Paginação por `offset` não teria essa garantia.
+- O cursor de uma wallet não vale em outra (`400`).
+- `limit` vai de 1 a 200, com padrão 50. O repositório busca `limit + 1` linhas para saber se existe próxima página sem fazer um `COUNT`.
+
+### Reconciliação
+
+`POST /wallets/:walletId/reconciliation` compara o saldo gravado na wallet com a soma dos lançamentos do ledger.
+
+- As duas leituras rodam numa transação **`REPEATABLE READ` somente leitura** (`UnitOfWork.snapshot`). Em `READ COMMITTED`, um débito commitado entre a leitura da wallet e a soma do ledger apareceria como divergência falsa.
+- A divergência **não é corrigida**: a resposta traz `consistent: false` e a diferença, e o caso de uso avisa um `ReconciliationReporter` (hoje um log de erro; a métrica entra com a observabilidade). Corrigir automaticamente esconderia justamente o bug que a reconciliação existe para achar.
+- Com os triggers, uma divergência não deveria conseguir existir. O teste que a provoca precisa desligá-los (`session_replication_role = replica`) dentro de uma transação.
+
 ## Garantias do banco
 
 O domínio valida as regras para dar erros claros; o banco as repete para que fiquem impossíveis de violar, mesmo com bug na aplicação.
@@ -118,4 +174,4 @@ Os testes de integração em `test/integration/database` escrevem SQL direto, se
 
 ## Ainda por documentar
 
-As próximas etapas completam este documento: API HTTP e mapeamento de status, processamento de transações e referências pendentes, publicação do outbox, consumo do SQS com DLQ, observabilidade e limitações conhecidas.
+As próximas etapas completam este documento: autenticação, processamento de transações (com `Idempotency-Key`, replay e status `202`) e referências pendentes, publicação do outbox, consumo do SQS com DLQ, observabilidade e limitações conhecidas.

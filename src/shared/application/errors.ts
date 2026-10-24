@@ -1,3 +1,19 @@
+export interface InputIssue {
+  path: string;
+  message: string;
+}
+
+/** The request is malformed: fixing the input is the only way forward, retrying as is will fail again. */
+export class InvalidInputError extends Error {
+  constructor(
+    message: string,
+    readonly issues: InputIssue[] = [],
+  ) {
+    super(message);
+    this.name = "InvalidInputError";
+  }
+}
+
 /** A unique constraint rejected the write — usually a concurrent request that committed first. */
 export class UniqueConstraintConflictError extends Error {
   constructor(

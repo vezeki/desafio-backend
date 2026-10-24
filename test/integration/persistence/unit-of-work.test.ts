@@ -1,12 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { InboxMessage } from "../../../src/messaging/domain/inbox-message.ts";
 import { TransientInfrastructureError } from "../../../src/shared/application/errors.ts";
-import { Money } from "../../../src/shared/domain/money.ts";
-import { FailureCode } from "../../../src/wagering/domain/failure-code.ts";
-import { WagerTransaction } from "../../../src/wagering/domain/wager-transaction.ts";
-import { WagerTransactionKind } from "../../../src/wagering/domain/wager-transaction-kind.ts";
 import { WagerTransactionStatus } from "../../../src/wagering/domain/wager-transaction-status.ts";
 import { OpenWalletUseCase } from "../../../src/wallet/application/open-wallet.use-case.ts";
+import { brl, placeBet as placeBetOn } from "../../support/fixtures.ts";
 import { createTestPersistence, type TestPersistence } from "../../support/orm.ts";
 
 let p: TestPersistence;
@@ -21,50 +18,12 @@ afterAll(async () => {
   await p.close();
 });
 
-const brl = (amount: string) => Money.from({ amount, currency: "BRL" });
-
 async function newWallet(balance: string) {
   return openWallet.execute({ playerId: p.ids.next(), initialBalance: { amount: balance, currency: "BRL" }, correlationId: "test" });
 }
 
-function bet(walletId: string, playerId: string, amount: string): WagerTransaction {
-  const externalId = p.ids.next();
-  return WagerTransaction.create({
-    id: p.ids.next(),
-    providerId: "provider-a",
-    externalTransactionId: externalId,
-    idempotencyKey: `key-${externalId}`,
-    walletId,
-    playerId,
-    roundId: "round-1",
-    gameId: "game-1",
-    kind: WagerTransactionKind.Bet,
-    money: brl(amount),
-    createdAt: new Date(),
-  });
-}
-
-/** Minimal debit flow, the same shape the submit use case will have. */
 function placeBet(walletId: string, playerId: string, amount: string, lock = true) {
-  return p.unitOfWork.run(async (ctx) => {
-    const wallet = lock ? await ctx.wallets.findByIdForUpdate(walletId) : await ctx.wallets.findById(walletId);
-    if (!wallet) throw new Error("wallet not found");
-    const transaction = bet(walletId, playerId, amount);
-    const now = new Date();
-
-    if (!wallet.canDebit(transaction.money)) {
-      transaction.reject(FailureCode.InsufficientFunds, now, wallet.balance);
-      ctx.transactions.add(transaction);
-      return transaction.status;
-    }
-
-    const entry = wallet.debit({ entryId: p.ids.next(), transactionId: transaction.id, money: transaction.money, at: now });
-    transaction.markProcessed(undefined, now, wallet.balance);
-    ctx.wallets.save(wallet);
-    ctx.transactions.add(transaction);
-    ctx.ledger.add(entry);
-    return transaction.status;
-  });
+  return placeBetOn(p.unitOfWork, p.ids, { walletId, playerId }, amount, { lock });
 }
 
 describe("MikroOrmUnitOfWork", () => {
@@ -201,6 +160,7 @@ function openWalletThenFail(playerId: string, failure: Error) {
         throw failure;
       }),
     read: p.unitOfWork.read.bind(p.unitOfWork),
+    snapshot: p.unitOfWork.snapshot.bind(p.unitOfWork),
   };
   return new OpenWalletUseCase(failingUnitOfWork, p.ids, p.clock).execute({
     playerId,

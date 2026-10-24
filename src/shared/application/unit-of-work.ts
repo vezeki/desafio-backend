@@ -18,8 +18,10 @@ export interface UnitOfWork {
    * so `work` must not have side effects outside the database.
    */
   run<T>(work: (ctx: TransactionContext) => Promise<T>): Promise<T>;
-  /** Read-only access without an explicit transaction. */
+  /** Read-only access without an explicit transaction: each query may see a different committed state. */
   read<T>(work: (ctx: TransactionContext) => Promise<T>): Promise<T>;
+  /** Read-only transaction where every query sees the same snapshot, for reads that must agree with each other. */
+  snapshot<T>(work: (ctx: TransactionContext) => Promise<T>): Promise<T>;
 }
 
 export const UNIT_OF_WORK = Symbol("UnitOfWork");
