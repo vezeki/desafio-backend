@@ -25,6 +25,11 @@ const ConfigSchema = z.object({
   OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   OUTBOX_BATCH_SIZE: z.coerce.number().int().positive().max(100).default(20),
   OUTBOX_LEASE_MS: z.coerce.number().int().positive().default(30_000),
+  /** Long poll of the wager queue. SQS allows at most 20 seconds. */
+  WAGER_CONSUMER_WAIT_SECONDS: z.coerce.number().int().min(0).max(20).default(10),
+  WAGER_CONSUMER_VISIBILITY_SECONDS: z.coerce.number().int().positive().default(30),
+  WAGER_CONSUMER_BATCH_SIZE: z.coerce.number().int().positive().max(10).default(5),
+  WAGER_CONSUMER_SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 });
 
 export type AppConfig = Omit<z.infer<typeof ConfigSchema>, "WORKERS_ENABLED"> & { WORKERS_ENABLED: boolean };

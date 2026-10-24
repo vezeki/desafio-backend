@@ -172,7 +172,7 @@ Os testes de integração em `test/integration/database` escrevem SQL direto, se
 
 ## Processamento de transações
 
-O fluxo de um comando (HTTP hoje, SQS depois) é o mesmo caso de uso, `SubmitWagerTransactionUseCase`. A persistência da transação, a alteração de saldo, o lançamento do ledger, o inbox (quando a entrada é a fila) e os eventos do outbox acontecem **numa única transação SQL**.
+O fluxo de um comando, vindo do HTTP ou da fila, é o mesmo caso de uso, `SubmitWagerTransactionUseCase`. A persistência da transação, a alteração de saldo, o lançamento do ledger, o inbox (quando a entrada é a fila) e os eventos do outbox acontecem **numa única transação SQL**.
 
 ```
 validar contrato (Money + WagerTransaction.create)     → 400, nada gravado
@@ -260,6 +260,25 @@ Falha de envio não perde o evento: a linha continua pendente, com `last_error`,
 
 O worker segue o mesmo ciclo do de referências pendentes (`OUTBOX_POLL_INTERVAL_MS`, lote de 20) e também fica desligado em `test`.
 
+## Consumo da fila de apostas
+
+A fila `wager-transactions.fifo` carrega `WagerTransactionRequested`. O `messageId` do corpo é o id estável do produtor: é a chave do inbox (`consumer_name = wager-transactions`) e o `correlationId`/`causationId` dos eventos. O `MessageId` do SQS muda de significado a cada redrive e **não** entra no inbox. A `idempotencyKey` vem de `data`, ou de `{providerId}:{externalTransactionId}` quando o campo falta.
+
+O ack é um `DeleteMessage` **depois** do commit. Cair entre o commit e o ack devolve a mensagem; o inbox vê o mesmo `messageId` e o caso de uso responde o resultado já gravado, sem debitar de novo. A janela de deduplicação do FIFO (5 minutos, por `MessageDeduplicationId`) é otimização: duas cópias com ids de deduplicação diferentes, ou uma cópia que volta depois da janela, continuam seguras por causa do inbox e da `idempotencyKey`.
+
+| O que aconteceu | O que a fila faz |
+|---|---|
+| Processada, rejeitada, pendente ou replay | ack. Rejeição de negócio já está gravada; repetir devolveria o mesmo `422` |
+| JSON inválido, contrato inválido (`OPENING`, dinheiro mal formado), `IDEMPOTENCY_CONFLICT` | cópia para a DLQ e delete. Retentar não muda o resultado |
+| Banco fora, deadlock, erro inesperado | `ChangeMessageVisibility` com backoff (1 s, dobrando, teto 60 s). Não é deletada |
+| Cinco recebimentos sem ack | o redrive da fila (`maxReceiveCount` 5) move para `wager-transactions-dlq.fifo` |
+
+O veneno vai direto para a DLQ para não gastar as cinco tentativas. A falha transitória **não** é deletada: quem move para a DLQ é o redrive, depois do limite. A DLQ é FIFO; o grupo é o da mensagem original (a wallet) e o `MessageDeduplicationId` é o id do SQS, então um reenvio do mesmo veneno não duplica a cópia dentro da janela.
+
+`MessageGroupId` é a wallet. O long poll espera até `WAGER_CONSUMER_WAIT_SECONDS` (10 s) e a visibilidade padrão é 30 s, igual ao timeout da fila. Várias instâncias competem: o SQS entrega cada mensagem a uma só enquanto ela está invisível.
+
+No SIGTERM o loop para de receber, aborta o long poll e espera `WAGER_CONSUMER_SHUTDOWN_TIMEOUT_MS` (10 s) pelo que já começou. O que terminou é confirmado. O que não terminou, e o lote que chegou depois do sinal, volta com visibilidade 0. Quem devolve o recibo é o dono dele: um ack atrasado não apaga a reentrega. O worker fica desligado em `test`, como os outros dois.
+
 ## Interpretações
 
 - **Saldo inicial.** Uma wallet aberta com saldo positivo ganha uma transação interna `OPENING` (provider `internal`), já `PROCESSED`, com o lançamento de crédito correspondente e um evento `WalletBalanceChanged`. Assim o saldo sempre é explicado pelo ledger. Wallet com saldo zero não tem lançamento.
@@ -274,4 +293,4 @@ O worker segue o mesmo ciclo do de referências pendentes (`OUTBOX_POLL_INTERVAL
 
 ## Ainda por documentar
 
-As próximas etapas completam este documento: autenticação (no-op + desenho), consumo do SQS com DLQ, observabilidade e limitações conhecidas.
+As próximas etapas completam este documento: autenticação (no-op + desenho), observabilidade e limitações conhecidas.

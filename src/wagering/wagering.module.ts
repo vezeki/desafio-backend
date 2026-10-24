@@ -7,6 +7,7 @@ import { ProcessDuePendingReferencesUseCase } from "./application/process-due-pe
 import { SubmitWagerTransactionUseCase } from "./application/submit-wager-transaction.use-case.ts";
 import { WageringController } from "./infrastructure/http/wagering.controller.ts";
 import { PendingReferenceWorker } from "./infrastructure/workers/pending-reference.worker.ts";
+import { WagerConsumerWorker } from "./infrastructure/workers/wager-consumer.worker.ts";
 
 @Module({
   controllers: [WageringController],
@@ -29,6 +30,7 @@ import { PendingReferenceWorker } from "./infrastructure/workers/pending-referen
         new ProcessDuePendingReferencesUseCase(unitOfWork, ids, clock),
     },
     PendingReferenceWorker,
+    WagerConsumerWorker,
   ],
   exports: [SubmitWagerTransactionUseCase, ProcessDuePendingReferencesUseCase],
 })

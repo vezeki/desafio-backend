@@ -75,7 +75,9 @@ Se a referência ainda não chegou, a API responde `202` e um worker retoma a tr
 
 Os eventos commitados (transação processada, rejeitada, saldo alterado, referência pendente) vão para a fila `integration-events.fifo`. O publicador aluga a linha por 30 s, publica fora da transação e marca `published_at`. Várias instâncias dividem a outbox. Se o processo morre no meio, o lease vence e outra publica. Um envio repetido é seguro: o consumidor deduplica pelo `eventId`.
 
-Os dois workers sobem com a API e ficam desligados em teste. `WORKERS_ENABLED=false` desliga os dois em qualquer ambiente.
+A mesma aposta pode chegar pela fila `wager-transactions.fifo` (`WagerTransactionRequested`). O consumidor usa o mesmo caso de uso do HTTP. O ack só sai depois do commit; uma reentrega cai no inbox e não debita de novo. Rejeição de negócio é confirmada. Falha transitória volta com backoff e, depois de 5 recebimentos, o redrive leva à DLQ. JSON inválido e conflito de idempotência vão direto para a DLQ. No SIGTERM, o que está em andamento termina ou a visibilidade volta a zero.
+
+Os três workers sobem com a API e ficam desligados em teste. `WORKERS_ENABLED=false` desliga os três em qualquer ambiente.
 
 | Status | Significado |
 |---|---|
