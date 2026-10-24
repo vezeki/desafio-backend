@@ -101,11 +101,13 @@ O provedor precisa decidir **só pelo status** se reenvia a requisição, sem in
 
 | Situação | Status | Reenviar? |
 |---|---|---|
-| Criado | `201` | — |
-| Payload inválido (formato, tipo, `Money` mal formado, cursor inválido) | `400 VALIDATION_ERROR` | só depois de corrigir |
+| Criado / transação processada | `201` | — |
+| Replay de transação processada | `200` + `idempotentReplay: true` | — |
+| Aceita, aguardando a referência | `202` | não; consultar depois |
+| Payload inválido (formato, tipo, `Money` mal formado, cursor inválido, `Idempotency-Key` ausente) | `400` com `VALIDATION_ERROR`, `KIND_NOT_ALLOWED`, `REFERENCE_REQUIRED` ou `REFERENCE_NOT_ALLOWED` | só depois de corrigir |
 | Recurso não encontrado | `404` | não |
-| Conflito (wallet duplicada) | `409` | não |
-| Regra de negócio violada | `422` | não |
+| Conflito (wallet duplicada, `IDEMPOTENCY_CONFLICT`) | `409` | não |
+| Transação rejeitada por regra de negócio (persistida) | `422` + `failureCode`, igual no replay | não |
 | Falha transitória (banco fora, lock timeout esgotado) | `503 INFRASTRUCTURE_UNAVAILABLE` + `Retry-After` | sim |
 | Erro inesperado | `500 INTERNAL_ERROR` (logado com stack) | — |
 
@@ -123,6 +125,8 @@ Inspirado no RFC 9457 (Problem Details), com `Content-Type: application/problem+
 ```
 
 Erros do próprio framework (JSON malformado, rota inexistente) saem no mesmo formato.
+
+**Exceção deliberada: a rejeição de transação (`422`).** Uma rejeição é um resultado **gravado**, que o replay devolve igual. O corpo é a própria transação (`transactionId`, `status: "REJECTED"`, `failureCode`, `failureCategory`, `balance`, `idempotentReplay`) mais `type`, `title` e `code` do Problem Details. O membro `status` do RFC (que repetiria o código HTTP) é omitido porque, no contrato do desafio, `status` é o estado da transação. O código HTTP continua na linha de status da resposta.
 
 ### Validação na borda
 
@@ -166,12 +170,73 @@ O domínio valida as regras para dar erros claros; o banco as repete para que fi
 
 Os testes de integração em `test/integration/database` escrevem SQL direto, sem passar pelo domínio, e conferem o nome exato da constraint que barrou cada violação.
 
+## Processamento de transações
+
+O fluxo de um comando (HTTP hoje, SQS depois) é o mesmo caso de uso, `SubmitWagerTransactionUseCase`. A persistência da transação, a alteração de saldo, o lançamento do ledger, o inbox (quando a entrada é a fila) e os eventos do outbox acontecem **numa única transação SQL**.
+
+```
+validar contrato (Money + WagerTransaction.create)     → 400, nada gravado
+  │
+  ├─ chave ou (provider, external id) já existe
+  │     mesmo payload  → replay (200 / 202 / 422 original)
+  │     payload outro  → 409 IDEMPOTENCY_CONFLICT
+  │
+  └─ lock da wallet (FOR UPDATE)
+        ├─ wallet inexistente / outro player / outra moeda → REJECTED persistido (422)
+        ├─ referência ausente ou ainda pendente            → PENDING_REFERENCE (202)
+        ├─ referência inválida ou saldo insuficiente       → REJECTED persistido (422)
+        └─ aplica débito/crédito (exceto LOSS)             → PROCESSED (201)
+```
+
+A decisão de negócio (processar, rejeitar, esperar) está em `WagerSettlement`, TypeScript puro. O caso de uso só carrega o que ela precisa (wallet com lock, avaliação da referência, ids) e grava o resultado.
+
+### Idempotência
+
+- O header `Idempotency-Key` é **obrigatório** e é a fonte da verdade. O valor recomendado é `{providerId}:{externalTransactionId}`.
+- `payloadHash = sha256(canonicalJson(campos de negócio))`, hexadecimal. O header, `correlationId` e qualquer metadado de transporte **não entram** no hash.
+- Mesma key e mesmo hash → a resposta original, com `idempotentReplay: true`. Isso vale para processada, rejeitada e pendente: o replay de uma rejeição continua `422`.
+- Mesma key com outro payload, ou o mesmo `(providerId, externalTransactionId)` sob outra key → `409 IDEMPOTENCY_CONFLICT`. Não é replay.
+- Pedido inválido (formato, `OPENING`, REFUND sem referência) **não é gravado**. Corrigir e reenviar com a mesma key é o caminho certo; se gravássemos o 400, a key ficaria presa a um erro de digitação.
+- Duas requisições idênticas em paralelo: uma commita, a outra toma o unique (`uq_wtx_idempotency_key` ou `uq_wtx_provider_external`) e vira replay. Sem wallet (não há linha para lockar) é exatamente esse o caminho.
+
+### Algoritmo do `payloadHash`
+
+1. Montar o objeto só com os campos de negócio, nesta lista fixa: `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`, `kind`, `money.amount`, `money.currency`, `referenceExternalTransactionId` (omitido se `undefined`).
+2. Canonicalizar: chaves de cada objeto em ordem lexicográfica, sem espaço, `undefined` omitido. Arrays (não usamos nenhum hoje) mantêm a ordem.
+3. `sha256` do UTF-8 desse JSON, digest em hex (64 caracteres).
+
+A lista de campos é explícita de propósito: um campo novo no JSON (comentário, locale) não muda o hash. `JSON.stringify` puro não serve — a ordem das chaves no objeto de entrada é indefinida.
+
+### Referência pendente
+
+`REFUND`/`ROLLBACK` (e `WIN`/`LOSS` quando apontam para uma BET) buscam a referência por `(providerId, referenceExternalTransactionId)`.
+
+| Situação da referência | Resultado |
+|---|---|
+| Ainda não chegou, ou ela mesma está `PENDING_REFERENCE` | `PENDING_REFERENCE`, `next_retry_at` pelo backoff (10 tentativas, 2 s dobrando até 10 min, ~27 min) |
+| `REJECTED` / `FAILED` | `REFERENCE_NOT_PROCESSED` — nunca vai virar `PROCESSED` |
+| Outro player / wallet / moeda / rodada / provider | `REFERENCE_MISMATCH` |
+| Tipo que a operação não pode referenciar | `REFERENCE_KIND_NOT_ALLOWED` |
+| Valor da reversão ≠ valor da referência | `AMOUNT_MISMATCH` |
+| Já tem REFUND ou ROLLBACK `PROCESSED` | `REFERENCE_ALREADY_REVERSED` |
+| Esgotou as tentativas sem ela chegar | `REFERENCE_NOT_FOUND` |
+
+O worker que retoma as pendentes vencidas entra na próxima etapa. A API já persiste o estado e responde `202`.
+
+A checagem da wallet vem **antes** da referência: transação para wallet inexistente é `WALLET_NOT_FOUND` na hora, não fica pendente. Wallet não chega "fora de ordem".
+
 ## Interpretações
 
 - **Saldo inicial.** Uma wallet aberta com saldo positivo ganha uma transação interna `OPENING` (provider `internal`), já `PROCESSED`, com o lançamento de crédito correspondente e um evento `WalletBalanceChanged`. Assim o saldo sempre é explicado pelo ledger. Wallet com saldo zero não tem lançamento.
 - **Uma wallet por jogador e moeda.** Abrir a segunda na mesma moeda é conflito; em outra moeda é permitido.
 - **`wager_transactions.wallet_id` sem FK.** Uma requisição para wallet inexistente é gravada como `REJECTED` (`WALLET_NOT_FOUND`) para que o replay devolva a mesma resposta. Quem precisa de integridade com a wallet é o ledger, e ele tem FK.
+- **Uma reversão de crédito por transação.** Uma BET aceita no máximo um `REFUND` ou um `ROLLBACK` processado — o primeiro que chegar. O segundo é `REFERENCE_ALREADY_REVERSED`. O índice único parcial `uq_wtx_single_reversal` é a garantia final quando dois chegam juntos: o perdedor da corrida é reavaliado e vira a mesma rejeição. `ROLLBACK` de um `REFUND` continua permitido (desfaz o reembolso).
+- **WIN numa BET já reembolsada.** Rejeitado com `REFERENCE_ALREADY_REVERSED`: rodada cancelada não paga prêmio.
+- **LOSS.** Gera `WagerTransactionProcessed` e não mexe no saldo nem no ledger. Valor zero é permitido só nela.
+- **WIN e LOSS sem referência.** Permitido. Quando a referência vem, precisa ser a BET da mesma rodada.
+- **`REVERSAL_INSUFFICIENT_FUNDS`.** Código próprio, separado de `INSUFFICIENT_FUNDS`: o jogador já tinha o crédito (WIN/REFUND) e o gastou; o ROLLBACK não cabe. É alerta operacional, não "jogador sem saldo".
+- **Pedido inválido não é persistido.** `OPENING` pela API, REFUND sem referência, dinheiro mal formatado → `400` e a key continua livre.
 
 ## Ainda por documentar
 
-As próximas etapas completam este documento: autenticação, processamento de transações (com `Idempotency-Key`, replay e status `202`) e referências pendentes, publicação do outbox, consumo do SQS com DLQ, observabilidade e limitações conhecidas.
+As próximas etapas completam este documento: worker de referências pendentes, autenticação (no-op + desenho), publicação do outbox, consumo do SQS com DLQ, observabilidade e limitações conhecidas.

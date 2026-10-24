@@ -5,6 +5,7 @@ import { HealthController } from "./health/health.controller.ts";
 import { createMikroOrmConfig } from "./shared/infrastructure/database/mikro-orm.config.ts";
 import { PersistenceModule } from "./shared/infrastructure/database/persistence.module.ts";
 import { SqsModule } from "./shared/infrastructure/sqs/sqs.module.ts";
+import { WageringModule } from "./wagering/wagering.module.ts";
 import { WalletModule } from "./wallet/wallet.module.ts";
 
 @Global()
@@ -30,6 +31,7 @@ export class AppModule {
         PersistenceModule,
         SqsModule,
         WalletModule,
+        WageringModule,
       ],
       controllers: [HealthController],
     };

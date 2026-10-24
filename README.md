@@ -56,6 +56,29 @@ curl 'localhost:3000/wallets/{walletId}/ledger?limit=50'           # próxima p�
 curl -X POST localhost:3000/wallets/{walletId}/reconciliation      # compara o saldo com a soma do ledger
 ```
 
+### Transações (BET, WIN, LOSS, REFUND, ROLLBACK)
+
+```bash
+curl -i -X POST localhost:3000/wagering/transactions \
+  -H 'content-type: application/json' -H 'Idempotency-Key: provider-a:transaction-123' \
+  -d '{"providerId":"provider-a","externalTransactionId":"transaction-123",
+       "playerId":"{playerId}","walletId":"{walletId}","roundId":"round-987","gameId":"fortune-chimp",
+       "kind":"BET","money":{"amount":"25.00","currency":"BRL"}}'
+
+curl localhost:3000/wagering/transactions/{transactionId}
+curl localhost:3000/providers/provider-a/wagering/transactions/transaction-123
+```
+
+`REFUND` e `ROLLBACK` exigem `referenceExternalTransactionId`. `Idempotency-Key` é obrigatório: repetir a mesma requisição devolve o resultado original com `"idempotentReplay": true`.
+
+| Status | Significado |
+|---|---|
+| `201` | processada |
+| `200` | replay de uma transação processada |
+| `202` | aguardando a transação referenciada (`PENDING_REFERENCE`) |
+| `422` | rejeitada por regra de negócio, com `failureCode` (também no replay) |
+| `409` | `IDEMPOTENCY_CONFLICT`: mesma key com outro payload |
+
 ### Erros
 
 Todos os endpoints respondem erro no mesmo formato (`application/problem+json`):
@@ -69,7 +92,7 @@ Todos os endpoints respondem erro no mesmo formato (`application/problem+json`):
 |---|---|---|
 | `400` | payload inválido (`VALIDATION_ERROR`, com a lista de `issues`) | só depois de corrigir |
 | `404` | recurso não existe | não |
-| `409` | conflito (wallet duplicada) | não |
+| `409` | conflito (wallet duplicada, conflito de idempotência) | não |
 | `422` | regra de negócio violada | não |
 | `503` | infraestrutura indisponível, com `Retry-After` | sim |
 

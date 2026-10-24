@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Inject, Param, Post, Query } from "@nestjs/common";
 import { z } from "zod";
 import { CorrelationId } from "../../../shared/infrastructure/http/correlation-id.ts";
+import { MoneyInput } from "../../../shared/infrastructure/http/money-input.ts";
 import { parseInput } from "../../../shared/infrastructure/http/parse-input.ts";
 import { GetWalletUseCase } from "../../application/get-wallet.use-case.ts";
 import {
@@ -10,9 +11,6 @@ import {
 } from "../../application/list-wallet-ledger.use-case.ts";
 import { OpenWalletUseCase } from "../../application/open-wallet.use-case.ts";
 import { ReconcileWalletUseCase } from "../../application/reconcile-wallet.use-case.ts";
-
-/** Shape only; the amount format and currency are validated by Money, the single source of those rules. */
-const MoneyInput = z.object({ amount: z.string(), currency: z.string() });
 
 const OpenWalletBody = z.object({
   playerId: z.uuid(),

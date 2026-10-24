@@ -27,6 +27,13 @@ const DOMAIN_ERROR_RESPONSES: Record<string, { status: number; title: string; co
   INVALID_WALLET: { status: HttpStatus.BAD_REQUEST, title: "Invalid request", code: "VALIDATION_ERROR" },
   WALLET_NOT_FOUND: { status: HttpStatus.NOT_FOUND, title: "Wallet not found" },
   WALLET_ALREADY_EXISTS: { status: HttpStatus.CONFLICT, title: "Wallet already exists" },
+  // Wager request contracts: rejected before anything is persisted.
+  VALIDATION_ERROR: { status: HttpStatus.BAD_REQUEST, title: "Invalid request" },
+  KIND_NOT_ALLOWED: { status: HttpStatus.BAD_REQUEST, title: "Invalid request" },
+  REFERENCE_REQUIRED: { status: HttpStatus.BAD_REQUEST, title: "Invalid request" },
+  REFERENCE_NOT_ALLOWED: { status: HttpStatus.BAD_REQUEST, title: "Invalid request" },
+  IDEMPOTENCY_CONFLICT: { status: HttpStatus.CONFLICT, title: "Idempotency conflict" },
+  TRANSACTION_NOT_FOUND: { status: HttpStatus.NOT_FOUND, title: "Transaction not found" },
 };
 
 @Catch()
