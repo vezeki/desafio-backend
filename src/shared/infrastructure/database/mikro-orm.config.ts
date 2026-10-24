@@ -1,6 +1,7 @@
 import { defineConfig } from "@mikro-orm/postgresql";
 import { Migrator } from "@mikro-orm/migrations";
 import { loadConfig } from "../../../config.ts";
+import { ENTITY_SCHEMAS } from "./entities.ts";
 
 export interface MikroOrmConfigOverrides {
   databaseUrl?: string;
@@ -10,8 +11,7 @@ export interface MikroOrmConfigOverrides {
 export function createMikroOrmConfig(overrides: MikroOrmConfigOverrides = {}, config = loadConfig()) {
   return defineConfig({
     clientUrl: overrides.databaseUrl ?? config.DATABASE_URL,
-    entities: [],
-    discovery: { warnWhenNoEntities: false },
+    entities: ENTITY_SCHEMAS,
     pool: { max: overrides.poolMax ?? config.DATABASE_POOL_MAX },
     // Bun runs TypeScript natively, so migrations are loaded from the .ts sources.
     preferTs: true,
