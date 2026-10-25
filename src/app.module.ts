@@ -6,6 +6,7 @@ import { createMikroOrmConfig } from "./shared/infrastructure/database/mikro-orm
 import { PersistenceModule } from "./shared/infrastructure/database/persistence.module.ts";
 import { MetricsModule } from "./shared/infrastructure/metrics/metrics.module.ts";
 import { MessagingModule } from "./messaging/messaging.module.ts";
+import { AuthModule } from "./shared/infrastructure/auth/auth.module.ts";
 import { SqsModule } from "./shared/infrastructure/sqs/sqs.module.ts";
 import { WageringModule } from "./wagering/wagering.module.ts";
 import { WalletModule } from "./wallet/wallet.module.ts";
@@ -31,6 +32,7 @@ export class AppModule {
         ConfigModule.forRoot(config),
         MikroOrmModule.forRoot({ ...createMikroOrmConfig({}, config), registerRequestContext: true }),
         MetricsModule,
+        AuthModule,
         PersistenceModule,
         SqsModule,
         MessagingModule,

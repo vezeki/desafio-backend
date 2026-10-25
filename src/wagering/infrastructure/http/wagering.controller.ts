@@ -1,6 +1,8 @@
 import { Body, Controller, Get, Headers, HttpStatus, Inject, Param, Post, Res } from "@nestjs/common";
 import type { Response } from "express";
 import { z } from "zod";
+import { assertProviderScope, type ProviderIdentity } from "../../../shared/application/provider-identity.ts";
+import { CurrentProvider } from "../../../shared/infrastructure/auth/current-provider.ts";
 import { CorrelationId } from "../../../shared/infrastructure/http/correlation-id.ts";
 import { MoneyInput } from "../../../shared/infrastructure/http/money-input.ts";
 import { parseInput } from "../../../shared/infrastructure/http/parse-input.ts";
@@ -57,23 +59,28 @@ export class WageringController {
     @Headers() headers: unknown,
     @Body() body: unknown,
     @CorrelationId() correlationId: string,
+    @CurrentProvider() identity: ProviderIdentity | undefined,
     @Res({ passthrough: true }) res: Response,
   ) {
     const { "idempotency-key": idempotencyKey } = parseInput(SubmitHeaders, headers);
     const request = parseInput(SubmitBody, body);
+    assertProviderScope(identity, request.providerId);
     const result = await this.submit.execute({ idempotencyKey, request, correlationId });
     return respond(res, result);
   }
 
   @Get("wagering/transactions/:transactionId")
-  byId(@Param() params: unknown) {
+  async byId(@Param() params: unknown, @CurrentProvider() identity: ProviderIdentity | undefined) {
     const { transactionId } = parseInput(TransactionParams, params);
-    return this.query.byId(transactionId);
+    const transaction = await this.query.byId(transactionId);
+    assertProviderScope(identity, transaction.providerId);
+    return transaction;
   }
 
   @Get("providers/:providerId/wagering/transactions/:externalTransactionId")
-  byExternalId(@Param() params: unknown) {
+  byExternalId(@Param() params: unknown, @CurrentProvider() identity: ProviderIdentity | undefined) {
     const { providerId, externalTransactionId } = parseInput(ExternalParams, params);
+    assertProviderScope(identity, providerId);
     return this.query.byExternalId(providerId, externalTransactionId);
   }
 }

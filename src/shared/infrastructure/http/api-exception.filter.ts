@@ -34,6 +34,7 @@ const DOMAIN_ERROR_RESPONSES: Record<string, { status: number; title: string; co
   REFERENCE_NOT_ALLOWED: { status: HttpStatus.BAD_REQUEST, title: "Invalid request" },
   IDEMPOTENCY_CONFLICT: { status: HttpStatus.CONFLICT, title: "Idempotency conflict" },
   TRANSACTION_NOT_FOUND: { status: HttpStatus.NOT_FOUND, title: "Transaction not found" },
+  PROVIDER_MISMATCH: { status: HttpStatus.FORBIDDEN, title: "Provider mismatch" },
 };
 
 @Catch()

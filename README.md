@@ -99,12 +99,15 @@ Todos os endpoints respondem erro no mesmo formato (`application/problem+json`):
 | Status | Significado | Reenviar? |
 |---|---|---|
 | `400` | payload inválido (`VALIDATION_ERROR`, com a lista de `issues`) | só depois de corrigir |
+| `403` | o token é de outro provedor (`PROVIDER_MISMATCH`) | não |
 | `404` | recurso não existe | não |
 | `409` | conflito (wallet duplicada, conflito de idempotência) | não |
 | `422` | regra de negócio violada | não |
 | `503` | infraestrutura indisponível, com `Retry-After` | sim |
 
 Toda resposta traz `x-correlation-id`. Se a requisição enviar esse header, o mesmo valor é usado nos logs e nos eventos.
+
+A API não exige token. O guard está instalado e o adaptador atual não autentica ninguém, então uma chamada sem `Authorization` segue igual. Quando houver identidade, o `providerId` do token tem que ser o do payload. Health e métricas continuam abertos. O desenho (OIDC, client credentials por provedor) está no `ARCHITECTURE.md`.
 
 ## Health checks
 

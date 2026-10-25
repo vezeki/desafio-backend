@@ -22,6 +22,20 @@ src/
 
 O domínio não conhece o ORM: não há decorators nem tipos do MikroORM nas entidades. Os testes unitários do domínio rodam sem banco, e o banco pode mudar sem tocar nas regras de negócio.
 
+```mermaid
+flowchart TD
+  HTTP["POST /wagering/transactions"] --> UC[SubmitWagerTransactionUseCase]
+  SQS["wager-transactions.fifo"] --> Consumer[consumidor] --> UC
+  UC --> TX["uma transação SQL"]
+  TX --> Wallet["wallet + ledger"]
+  TX --> Inbox[inbox]
+  TX --> Outbox[outbox]
+  Outbox --> Publisher["publicador, depois do commit"]
+  Publisher --> Events["integration-events.fifo"]
+```
+
+O ack da fila de apostas e o `SendMessage` da fila de eventos acontecem **depois** do commit. Morrer no meio devolve a aposta pelo inbox, ou republica o evento quando o lease vence.
+
 ## Escolha do ORM: MikroORM
 
 O enunciado prefere MikroORM, e ele também é a melhor escolha técnica para este problema:
@@ -314,6 +328,34 @@ O mesmo `correlationId` vai nos eventos. Na fila, o `messageId` do corpo entra n
 
 O contador só anda depois que a transação SQL voltou. Um deadlock que dá rollback e tenta de novo não vira duas decisões. O lag da outbox não é empurrado pelo publicador: quem raspa vê o banco naquele instante. `/health/live` e `/health/ready` continuam sem corpo de negócio. `/metrics` também não exige autenticação, no mesmo espírito do health: quem chega na porta já está na rede interna.
 
-## Ainda por documentar
+## Autenticação
 
-As próximas etapas completam este documento: autenticação (no-op + desenho) e limitações conhecidas.
+O enunciado não avalia autenticação. O que está no código é o encaixe, desligado.
+
+`ProviderIdentityPort.authenticate` lê o header `Authorization`. O adaptador instalado, `NoopProviderIdentity`, devolve `undefined`: não há token, e a API se comporta como antes. O guard global roda em toda rota exceto `/health` e `/metrics`, que continuam abertos. Ele só anexa a identidade no request; não rejeita a ausência.
+
+A regra que passa a valer quando um adaptador de verdade devolver uma identidade está em `assertProviderScope`: o `providerId` do token tem que ser o do corpo (no submit) e o da URL (na consulta por id externo). Se não for, a resposta é `403 PROVIDER_MISMATCH` e nada é gravado. Consulta por id interno faz a mesma checagem depois de carregar a transação.
+
+O desenho, para quando for ligar, é OIDC com **client credentials por provedor**:
+
+- Cada provedor é um client. O token traz um claim `provider_id`.
+- A audiência é esta API. Assinatura e expiração são checadas no adaptador, que substitui o no-op. Token ruim vira `401`, antes de qualquer caso de uso.
+- O `providerId` do token é o único que aquele client pode submeter. O corpo não escolhe o provedor; ele tem que repetir o do token.
+- Carteiras (`/wallets`) não são do provedor de jogo. São uma borda de operação, com outra audiência, também ainda aberta.
+- A fila `wager-transactions.fifo` é canal interno. A mensagem não carrega token. Quem publica nela já passou pela borda HTTP, ou é um produtor da própria rede. O `providerId` do corpo segue a validação de domínio, não um JWT.
+
+Keycloak cabe como servidor OIDC desse desenho. Não está neste repositório: não muda saldo, idempotência nem concorrência.
+
+## Limitações
+
+- **A porta não exige token.** Quem alcança o processo submete. O guard não é um controle de acesso enquanto o adaptador for o no-op.
+- **Não há exactly-once entre a fila e o Postgres.** A entrega é at-least-once. A garantia é o inbox mais a `Idempotency-Key`. A janela de 5 minutos do FIFO só elimina cópias óbvias.
+- **A outbox também é at-least-once.** Este serviço publica `integration-events.fifo` e não consome essa fila. Quem consome deduplica pelo `eventId`.
+- **Uma wallet quente serializa.** O lock é daquela linha, não global. Não há partição do ledger nem snapshot de saldo para um volume em que uma única carteira seja o gargalo.
+- **O dinheiro cabe numa forma.** Uma moeda por wallet, duas casas decimais, uma reversão de crédito por transação. Reversão parcial e carteira multi-moeda não existem.
+- **Reconciliação não corrige.** Ela compara, responde e conta. Ajustar o saldo na mão esconderia a causa.
+- **Referência que ainda não chegou espera o poll.** Não é resolvida dentro do submit da BET, para não inverter a ordem dos locks.
+- **Chave de idempotência não expira.** Uma key usada fica com aquele resultado. Não há prazo para reusar a key com outro payload.
+- **A DLQ não volta sozinha.** Mensagem inválida ou esgotada fica lá até alguém reprocessar.
+- **Contadores zeram com o processo.** O histórico fica no Prometheus, do lado de fora.
+- **`/health` e `/metrics` são abertos.** A premissa é que só a rede interna chega nessa porta.
