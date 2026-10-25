@@ -1,6 +1,7 @@
 import type { Clock } from "../../shared/application/clock.ts";
 import { UniqueConstraintConflictError } from "../../shared/application/errors.ts";
 import type { IdGenerator } from "../../shared/application/id-generator.ts";
+import { noopMetrics, type AppMetrics } from "../../shared/application/metrics.ts";
 import type { TransactionContext, UnitOfWork } from "../../shared/application/unit-of-work.ts";
 import type { WagerTransaction } from "../domain/wager-transaction.ts";
 import { WagerSettlement } from "../domain/wager-settlement.ts";
@@ -34,6 +35,7 @@ export class ProcessDuePendingReferencesUseCase {
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
     private readonly settlement = new WagerSettlement(),
+    private readonly metrics: AppMetrics = noopMetrics,
   ) {}
 
   async execute(limit = DEFAULT_PENDING_REFERENCE_BATCH): Promise<PendingReferenceTick> {
@@ -51,8 +53,11 @@ export class ProcessDuePendingReferencesUseCase {
 
   private async processNext(): Promise<PendingReferenceOutcome | undefined> {
     for (let attempt = 1; ; attempt++) {
+      const started = performance.now();
       try {
-        return await this.unitOfWork.run((ctx) => this.claimAndSettle(ctx));
+        const outcome = await this.unitOfWork.run((ctx) => this.claimAndSettle(ctx));
+        if (outcome) this.record(outcome, (performance.now() - started) / 1000);
+        return outcome;
       } catch (error) {
         if (error instanceof UniqueConstraintConflictError && error.constraint === REVERSAL_RACE && attempt === 1) {
           continue;
@@ -96,5 +101,12 @@ export class ProcessDuePendingReferencesUseCase {
       this.ids,
     );
     return { transaction: toWagerTransactionView(transaction), outcome: settlement.outcome };
+  }
+
+  /** A row that is still waiting was already counted when it was first stored. This tick only retries it. */
+  private record(outcome: PendingReferenceOutcome, seconds: number): void {
+    this.metrics.observeProcessing(seconds);
+    if (outcome.outcome === "PENDING_REFERENCE") this.metrics.retry("pending_reference");
+    else this.metrics.transactionSettled(outcome.transaction.kind, outcome.outcome);
   }
 }

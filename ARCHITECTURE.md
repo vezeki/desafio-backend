@@ -295,6 +295,25 @@ Três processos consomem a mesma fila no teste, cada um com lote 1, e cada apost
 - **`REVERSAL_INSUFFICIENT_FUNDS`.** Código próprio, separado de `INSUFFICIENT_FUNDS`: o jogador já tinha o crédito (WIN/REFUND) e o gastou; o ROLLBACK não cabe. É alerta operacional, não "jogador sem saldo".
 - **Pedido inválido não é persistido.** `OPENING` pela API, REFUND sem referência, dinheiro mal formatado → `400` e a key continua livre.
 
+## Observabilidade
+
+Cada requisição HTTP ganha um `x-correlation-id` (o que veio, se for bem formado, ou um UUID) e esse valor fica no contexto assíncrono da chamada. O log é JSON, uma linha por evento, pelo pino. A linha de acesso traz método, caminho, status e duração. Não traz query string, corpo, `playerId` nem valor em dinheiro: o caminho da carteira e o id da transação bastam para achar a operação, e o saldo continua só no banco e na resposta.
+
+O mesmo `correlationId` vai nos eventos. Na fila, o `messageId` do corpo entra no log da decisão. O `GET /metrics` fala o formato do Prometheus:
+
+| Métrica | O que conta |
+|---|---|
+| `wager_transactions_total{kind,status}` | decisão gravada agora. Replay não entra. Uma pendente que depois processa conta de novo, com o status novo |
+| `wager_duplicates_total{source,type}` | `http` ou `sqs`; `idempotency` (mesma key) ou `inbox` (mesma mensagem) |
+| `wager_retries_total{reason}` | `deadlock`, `lock_timeout`, `serialization_failure`, `pending_reference`, `outbox_publish`, `sqs_visibility` |
+| `wallet_lock_conflicts_total{reason}` | só deadlock e timeout de lock |
+| `sqs_dlq_messages_total` | mensagem copiada para a DLQ |
+| `wager_processing_duration_seconds` | tempo para decidir uma transação |
+| `outbox_pending_messages`, `outbox_lag_seconds` | lidos na hora do scrape: quantas linhas falta publicar, e a idade da mais antiga |
+| `reconciliation_divergences_total` | uma checagem cujo saldo armazenado não fecha com o ledger |
+
+O contador só anda depois que a transação SQL voltou. Um deadlock que dá rollback e tenta de novo não vira duas decisões. O lag da outbox não é empurrado pelo publicador: quem raspa vê o banco naquele instante. `/health/live` e `/health/ready` continuam sem corpo de negócio. `/metrics` também não exige autenticação, no mesmo espírito do health: quem chega na porta já está na rede interna.
+
 ## Ainda por documentar
 
-As próximas etapas completam este documento: autenticação (no-op + desenho), observabilidade e limitações conhecidas.
+As próximas etapas completam este documento: autenticação (no-op + desenho) e limitações conhecidas.

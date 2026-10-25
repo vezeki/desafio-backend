@@ -110,3 +110,6 @@ Toda resposta traz `x-correlation-id`. Se a requisição enviar esse header, o m
 
 - `GET /health/live` — processo vivo
 - `GET /health/ready` — PostgreSQL e as duas filas SQS (apostas e eventos) alcançáveis
+- `GET /metrics` — contadores Prometheus (decisões, duplicatas, retries, DLQ, lag da outbox, divergências)
+
+O log sai em JSON. Cada linha de uma requisição HTTP carrega o `x-correlation-id`. O corpo, o `playerId` e o valor em dinheiro não entram no log.

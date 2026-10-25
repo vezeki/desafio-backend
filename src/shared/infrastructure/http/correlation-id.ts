@@ -1,6 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { createParamDecorator, type ExecutionContext } from "@nestjs/common";
 import type { NextFunction, Request, Response } from "express";
+
+/** The correlation id of the HTTP request currently running on this async call stack. */
+export const requestContext = new AsyncLocalStorage<{ correlationId: string }>();
 
 export const CORRELATION_ID_HEADER = "x-correlation-id";
 
@@ -14,6 +18,7 @@ export function correlationIdMiddleware(req: Request, res: Response, next: NextF
   const correlationId = received && ACCEPTED_CORRELATION_ID.test(received) ? received : randomUUID();
   (req as CorrelatedRequest).correlationId = correlationId;
   res.setHeader(CORRELATION_ID_HEADER, correlationId);
+  requestContext.enterWith({ correlationId });
   next();
 }
 

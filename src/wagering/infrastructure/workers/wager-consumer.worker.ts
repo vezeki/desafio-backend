@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap, type OnApplicationShutdown } from "@nestjs/common";
 import { SQSClient } from "@aws-sdk/client-sqs";
 import { APP_CONFIG, type AppConfig } from "../../../config.ts";
+import { APP_METRICS, type AppMetrics } from "../../../shared/application/metrics.ts";
 import { ConsumeWagerMessage } from "../../application/consume-wager-message.ts";
 import { SubmitWagerTransactionUseCase } from "../../application/submit-wager-transaction.use-case.ts";
 import { SqsWagerQueue } from "../sqs/sqs-wager-queue.ts";
@@ -15,6 +16,7 @@ export class WagerConsumerWorker implements OnApplicationBootstrap, OnApplicatio
     @Inject(SubmitWagerTransactionUseCase) private readonly submit: SubmitWagerTransactionUseCase,
     @Inject(SQSClient) private readonly sqs: SQSClient,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
+    @Inject(APP_METRICS) private readonly metrics: AppMetrics,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -30,8 +32,14 @@ export class WagerConsumerWorker implements OnApplicationBootstrap, OnApplicatio
         shutdownTimeoutMs: this.config.WAGER_CONSUMER_SHUTDOWN_TIMEOUT_MS,
       },
       {
-        retried: (receiveCount, reason) => this.logger.warn({ receiveCount, reason }, "wager message will be retried"),
-        deadLettered: (reason) => this.logger.error({ reason }, "wager message sent to the dead-letter queue"),
+        retried: (receiveCount, reason) => {
+          this.metrics.retry("sqs_visibility");
+          this.logger.warn({ receiveCount, reason }, "wager message will be retried");
+        },
+        deadLettered: (reason) => {
+          this.metrics.deadLetter();
+          this.logger.error({ reason }, "wager message sent to the dead-letter queue");
+        },
         failed: (error) => this.logger.error({ err: error }, "wager consumer failed"),
       },
     );

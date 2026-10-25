@@ -2,7 +2,9 @@ import { InboxMessage } from "../../messaging/domain/inbox-message.ts";
 import type { Clock } from "../../shared/application/clock.ts";
 import { UniqueConstraintConflictError } from "../../shared/application/errors.ts";
 import type { IdGenerator } from "../../shared/application/id-generator.ts";
+import { noopMetrics, type AppMetrics } from "../../shared/application/metrics.ts";
 import type { TransactionContext, UnitOfWork } from "../../shared/application/unit-of-work.ts";
+import { logger } from "../../shared/infrastructure/logging/logger.ts";
 import { Money, type MoneyProps } from "../../shared/domain/money.ts";
 import { WagerTransaction, type CreateWagerTransactionProps } from "../domain/wager-transaction.ts";
 import type { WagerTransactionKind } from "../domain/wager-transaction-kind.ts";
@@ -40,6 +42,9 @@ export interface SubmitWagerTransactionResult {
   idempotentReplay: boolean;
 }
 
+type Duplicate = "inbox" | "idempotency";
+type Settled = SubmitWagerTransactionResult & { duplicate?: Duplicate };
+
 /** Unique constraints that mean "this request was already registered" and are resolved as replay or conflict. */
 const ALREADY_REGISTERED = new Set(["uq_wtx_idempotency_key", "uq_wtx_provider_external"]);
 /** Another reversal of the same reference won the race; running again turns it into REFERENCE_ALREADY_REVERSED. */
@@ -51,9 +56,19 @@ export class SubmitWagerTransactionUseCase {
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
     private readonly settlement = new WagerSettlement(),
+    private readonly metrics: AppMetrics = noopMetrics,
   ) {}
 
   async execute(command: SubmitWagerTransactionCommand): Promise<SubmitWagerTransactionResult> {
+    const started = performance.now();
+    try {
+      return this.finish(command, await this.settle(command));
+    } finally {
+      this.metrics.observeProcessing((performance.now() - started) / 1000);
+    }
+  }
+
+  private async settle(command: SubmitWagerTransactionCommand): Promise<Settled> {
     const props = this.toProps(command);
     // Validates the contract before opening a transaction: an invalid request is never persisted.
     const { payloadHash } = WagerTransaction.create(props);
@@ -68,36 +83,56 @@ export class SubmitWagerTransactionUseCase {
 
         // A concurrent identical request committed first (no wallet lock serialized us, e.g. unknown wallet).
         const replay = await this.unitOfWork.read((ctx) => this.findReplay(ctx, command.idempotencyKey, props, payloadHash));
-        if (replay) return replay;
+        if (replay) return { ...replay, duplicate: "idempotency" };
         throw error;
       }
     }
+  }
+
+  /** Counters move only after the SQL transaction returned, so a deadlock retry is not counted twice. */
+  private finish(command: SubmitWagerTransactionCommand, settled: Settled): SubmitWagerTransactionResult {
+    if (settled.duplicate) this.metrics.duplicate(command.inbox ? "sqs" : "http", settled.duplicate);
+    else this.metrics.transactionSettled(settled.transaction.kind, settled.transaction.status);
+    logger.info(
+      {
+        correlationId: command.correlationId,
+        ...(command.inbox ? { messageId: command.inbox.messageId } : {}),
+        transactionId: settled.transaction.transactionId,
+        walletId: settled.transaction.walletId,
+        providerId: settled.transaction.providerId,
+        kind: settled.transaction.kind,
+        status: settled.transaction.status,
+        idempotentReplay: settled.idempotentReplay,
+      },
+      "wager transaction decided",
+    );
+    return { transaction: settled.transaction, idempotentReplay: settled.idempotentReplay };
   }
 
   private async process(
     ctx: TransactionContext,
     command: SubmitWagerTransactionCommand,
     props: CreateWagerTransactionProps,
-  ): Promise<SubmitWagerTransactionResult> {
+  ): Promise<Settled> {
     // Created inside the work: the unit of work may run it again after a deadlock.
     const transaction = WagerTransaction.create(props);
     const now = this.clock.now();
 
     if (command.inbox && !(await this.recordInbox(ctx, command.inbox, transaction.payloadHash, now))) {
       const replay = await this.findReplay(ctx, command.idempotencyKey, props, transaction.payloadHash);
-      if (replay) return replay;
+      if (replay) return { ...replay, duplicate: "inbox" };
       throw new Error(`Inbox has message ${command.inbox.messageId} but no transaction for key ${command.idempotencyKey}`);
     }
 
     // Cheap path for retries: no lock needed to answer a replay.
     const early = await this.findReplay(ctx, command.idempotencyKey, props, transaction.payloadHash);
-    if (early) return early;
+    if (early) return { ...early, duplicate: "idempotency" };
 
     const wallet = await ctx.wallets.findByIdForUpdate(transaction.walletId);
 
     // While we waited for the lock, an identical request may have been committed.
     const afterLock = await this.findReplay(ctx, command.idempotencyKey, props, transaction.payloadHash);
-    if (afterLock) return afterLock;
+    if (afterLock) return { ...afterLock, duplicate: "idempotency" };
 
     const settlement = this.settlement.settle({
       transaction,

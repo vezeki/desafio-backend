@@ -4,6 +4,7 @@ import { APP_CONFIG, type AppConfig } from "./config.ts";
 import { HealthController } from "./health/health.controller.ts";
 import { createMikroOrmConfig } from "./shared/infrastructure/database/mikro-orm.config.ts";
 import { PersistenceModule } from "./shared/infrastructure/database/persistence.module.ts";
+import { MetricsModule } from "./shared/infrastructure/metrics/metrics.module.ts";
 import { MessagingModule } from "./messaging/messaging.module.ts";
 import { SqsModule } from "./shared/infrastructure/sqs/sqs.module.ts";
 import { WageringModule } from "./wagering/wagering.module.ts";
@@ -29,6 +30,7 @@ export class AppModule {
       imports: [
         ConfigModule.forRoot(config),
         MikroOrmModule.forRoot({ ...createMikroOrmConfig({}, config), registerRequestContext: true }),
+        MetricsModule,
         PersistenceModule,
         SqsModule,
         MessagingModule,

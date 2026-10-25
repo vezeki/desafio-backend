@@ -1,4 +1,5 @@
 import type { Clock } from "../../shared/application/clock.ts";
+import { noopMetrics, type AppMetrics } from "../../shared/application/metrics.ts";
 import type { UnitOfWork } from "../../shared/application/unit-of-work.ts";
 import type { OutboxMessage } from "../domain/outbox-message.ts";
 import type { IntegrationEventPublisher } from "./ports/event-publisher.ts";
@@ -27,6 +28,7 @@ export class PublishOutboxUseCase {
     private readonly leaseMs = DEFAULT_OUTBOX_LEASE_MS,
     /** Runs after the broker accepted the send and before `published_at` is set. The crash test exits here. */
     private readonly afterPublish: () => void = () => {},
+    private readonly metrics: AppMetrics = noopMetrics,
   ) {}
 
   async execute(limit = DEFAULT_OUTBOX_BATCH): Promise<OutboxTick> {
@@ -68,6 +70,7 @@ export class PublishOutboxUseCase {
       this.afterPublish();
     } catch (error) {
       const retryAt = await this.recordFailure(message.id, error);
+      if (retryAt) this.metrics.retry("outbox_publish");
       return retryAt ? { kind: "failed", retryAt } : { kind: "deferred" };
     }
     return (await this.markPublished(message.id)) ? { kind: "published" } : { kind: "deferred" };

@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { CLOCK, type Clock } from "../shared/application/clock.ts";
 import { ID_GENERATOR, type IdGenerator } from "../shared/application/id-generator.ts";
+import { APP_METRICS, type AppMetrics } from "../shared/application/metrics.ts";
 import { UNIT_OF_WORK, type UnitOfWork } from "../shared/application/unit-of-work.ts";
 import { GetWagerTransactionUseCase } from "./application/get-wager-transaction.use-case.ts";
 import { ProcessDuePendingReferencesUseCase } from "./application/process-due-pending-references.use-case.ts";
@@ -14,9 +15,9 @@ import { WagerConsumerWorker } from "./infrastructure/workers/wager-consumer.wor
   providers: [
     {
       provide: SubmitWagerTransactionUseCase,
-      inject: [UNIT_OF_WORK, ID_GENERATOR, CLOCK],
-      useFactory: (unitOfWork: UnitOfWork, ids: IdGenerator, clock: Clock) =>
-        new SubmitWagerTransactionUseCase(unitOfWork, ids, clock),
+      inject: [UNIT_OF_WORK, ID_GENERATOR, CLOCK, APP_METRICS],
+      useFactory: (unitOfWork: UnitOfWork, ids: IdGenerator, clock: Clock, metrics: AppMetrics) =>
+        new SubmitWagerTransactionUseCase(unitOfWork, ids, clock, undefined, metrics),
     },
     {
       provide: GetWagerTransactionUseCase,
@@ -25,9 +26,9 @@ import { WagerConsumerWorker } from "./infrastructure/workers/wager-consumer.wor
     },
     {
       provide: ProcessDuePendingReferencesUseCase,
-      inject: [UNIT_OF_WORK, ID_GENERATOR, CLOCK],
-      useFactory: (unitOfWork: UnitOfWork, ids: IdGenerator, clock: Clock) =>
-        new ProcessDuePendingReferencesUseCase(unitOfWork, ids, clock),
+      inject: [UNIT_OF_WORK, ID_GENERATOR, CLOCK, APP_METRICS],
+      useFactory: (unitOfWork: UnitOfWork, ids: IdGenerator, clock: Clock, metrics: AppMetrics) =>
+        new ProcessDuePendingReferencesUseCase(unitOfWork, ids, clock, undefined, metrics),
     },
     PendingReferenceWorker,
     WagerConsumerWorker,
