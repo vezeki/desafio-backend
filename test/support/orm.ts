@@ -16,13 +16,16 @@ export interface TestPersistence {
   close(): Promise<void>;
 }
 
-export async function createTestPersistence(options: Partial<UnitOfWorkOptions> = {}): Promise<TestPersistence> {
-  const url = await prepareTestDatabase();
+export async function createTestPersistence(
+  options: Partial<UnitOfWorkOptions> & { databaseUrl?: string } = {},
+): Promise<TestPersistence> {
+  const { databaseUrl, ...unitOfWorkOptions } = options;
+  const url = databaseUrl ?? (await prepareTestDatabase());
   const orm = await MikroORM.init(createMikroOrmConfig({ databaseUrl: url, poolMax: 20 }));
   const sql = new SQL(url);
   return {
     orm,
-    unitOfWork: new MikroOrmUnitOfWork(orm.em, options),
+    unitOfWork: new MikroOrmUnitOfWork(orm.em, unitOfWorkOptions),
     sql,
     ids: new UuidV7Generator(),
     clock: new SystemClock(),

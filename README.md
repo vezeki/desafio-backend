@@ -77,7 +77,7 @@ Os eventos commitados (transação processada, rejeitada, saldo alterado, refer�
 
 A mesma aposta pode chegar pela fila `wager-transactions.fifo` (`WagerTransactionRequested`). O consumidor usa o mesmo caso de uso do HTTP. O ack só sai depois do commit; uma reentrega cai no inbox e não debita de novo. Rejeição de negócio é confirmada. Falha transitória volta com backoff e, depois de 5 recebimentos, o redrive leva à DLQ. JSON inválido e conflito de idempotência vão direto para a DLQ. No SIGTERM, o que está em andamento termina ou a visibilidade volta a zero.
 
-Os três workers sobem com a API e ficam desligados em teste. `WORKERS_ENABLED=false` desliga os três em qualquer ambiente.
+Os três workers sobem com a API e ficam desligados em teste. `WORKERS_ENABLED=false` desliga os três em qualquer ambiente. Um teste sobe três processos na mesma fila e mata um depois do commit, antes do ack: a reentrega não debita de novo.
 
 | Status | Significado |
 |---|---|

@@ -25,6 +25,8 @@ export class PublishOutboxUseCase {
     private readonly publisher: IntegrationEventPublisher,
     private readonly instanceId: string,
     private readonly leaseMs = DEFAULT_OUTBOX_LEASE_MS,
+    /** Runs after the broker accepted the send and before `published_at` is set. The crash test exits here. */
+    private readonly afterPublish: () => void = () => {},
   ) {}
 
   async execute(limit = DEFAULT_OUTBOX_BATCH): Promise<OutboxTick> {
@@ -63,6 +65,7 @@ export class PublishOutboxUseCase {
   ): Promise<{ kind: "published" } | { kind: "failed"; retryAt: Date } | { kind: "deferred" }> {
     try {
       await this.publisher.publish(message);
+      this.afterPublish();
     } catch (error) {
       const retryAt = await this.recordFailure(message.id, error);
       return retryAt ? { kind: "failed", retryAt } : { kind: "deferred" };

@@ -10,6 +10,11 @@ export interface WagerConsumerOptions {
   batchSize: number;
   /** How long shutdown waits for a message already being processed before returning it to the queue. */
   shutdownTimeoutMs: number;
+  /**
+   * Runs after the SQL transaction committed and before the ack.
+   * The process-crash test exits here. Production does not set it.
+   */
+  afterCommit?: () => void;
 }
 
 export interface WagerConsumerLog {
@@ -103,6 +108,7 @@ export class WagerConsumer {
     if (!this.inflightHandles.delete(message.receiptHandle)) return;
     try {
       if (outcome.action === "ack") {
+        this.options.afterCommit?.();
         await this.queue.ack(message.receiptHandle);
       } else if (outcome.action === "dead-letter") {
         this.log.deadLettered(outcome.reason);

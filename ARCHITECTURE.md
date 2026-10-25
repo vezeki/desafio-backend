@@ -254,6 +254,8 @@ A publicação não segura a transação aberta: uma conexão do pool não fica 
 
 Garantia: **at-least-once**. Morrer depois do `SendMessage` e antes de marcar `published_at` publica de novo. O `MessageDeduplicationId` é o `eventId`, então o SQS descarta a repetição dentro da janela de 5 minutos — otimização, não a garantia. Quem consome deduplica pelo `eventId`, e isso vale depois da janela também.
 
+Um teste sobe um processo só para publicar e mata esse processo nesse intervalo (`process.exit` depois do envio, antes de gravar `published_at`). A linha fica alugada e sem `published_at`. Quando o lease vence, outro processo marca o evento. O relógio adiantado dos testes de unidade cobre a mesma regra; este cobre o processo de verdade.
+
 `MessageGroupId` é o `aggregateId`. Eventos do mesmo agregado saem na ordem de `occurredAt`; agregados diferentes publicam em paralelo. Se o envio de um evento falha, os seguintes **do mesmo agregado** voltam para a fila com o mesmo `next_attempt_at`, sem contar tentativa: anunciar o saldo novo antes do antigo seria pior do que esperar o backoff. Um agregado que falhou não segura os outros.
 
 Falha de envio não perde o evento: a linha continua pendente, com `last_error`, e volta quando o backoff passa. O `/health/ready` só fica de pé se o Postgres, a fila de apostas e a fila de eventos respondem.
@@ -278,6 +280,8 @@ O veneno vai direto para a DLQ para não gastar as cinco tentativas. A falha tra
 `MessageGroupId` é a wallet. O long poll espera até `WAGER_CONSUMER_WAIT_SECONDS` (10 s) e a visibilidade padrão é 30 s, igual ao timeout da fila. Várias instâncias competem: o SQS entrega cada mensagem a uma só enquanto ela está invisível.
 
 No SIGTERM o loop para de receber, aborta o long poll e espera `WAGER_CONSUMER_SHUTDOWN_TIMEOUT_MS` (10 s) pelo que já começou. O que terminou é confirmado. O que não terminou, e o lote que chegou depois do sinal, volta com visibilidade 0. Quem devolve o recibo é o dono dele: um ack atrasado não apaga a reentrega. O worker fica desligado em `test`, como os outros dois.
+
+Três processos consomem a mesma fila no teste, cada um com lote 1, e cada aposta debita uma vez. Outro processo é morto depois do commit e antes do ack: o saldo já mudou, a mensagem volta quando a visibilidade acaba, e o processo seguinte acha o inbox e não debita de novo. O `process.exit` fica no processo de teste; a API não instala esse gancho.
 
 ## Interpretações
 
